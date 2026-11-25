@@ -1,0 +1,22 @@
+[package]
+name = "cru-modern"
+version = "0.1.0"
+edition = "2021"
+description = "Modern UI for Custom Resolution Utility (EDID editor)"
+authors = ["CRU Modern"]
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "accesskit",
+] }
+egui = "0.31"
+rfd = "0.18"
+thiserror = "2"
+winreg = "0.56"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true

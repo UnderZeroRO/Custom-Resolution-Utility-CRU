@@ -1,0 +1,11 @@
+# Rust build outputs
+/target/
+/target*/
+**/*.rs.bk
+
+# Local screenshots & scratch logs
+*.png
+*.log
+
+# Workspace tooling artifacts
+.superpowers/
