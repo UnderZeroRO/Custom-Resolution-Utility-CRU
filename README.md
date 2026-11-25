@@ -22,7 +22,7 @@ CRU Modern reads and writes Windows `EDID_OVERRIDE` entries directly in the regi
 |---|---|
 | **Display Sidebar** | Enumerates active displays (`EnumDisplayDevicesW`) and inactive registry entries (`HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY`), showing active mode, override badge, and quick `.bin` import/export. |
 | **Hero Summary** | Displays scaled monitor illustration, manufacturer/hardware ID/product code/serial metadata, EDID version, block count, signal type, and one-click **Remove override**. |
-| **Detailed Resolutions** | Add, edit, delete, and reorder Detailed Timing Descriptors (DTDs) with aspect-ratio previews, CVT-RB / **Optimize timings** (CVT-RB2 exact-Hz auto-tuner), custom blanking/sync/polarity controls, and real-time pixel clock / bandwidth validation. |
+| **Detailed Resolutions** | Add, edit, delete, and reorder Detailed Timing Descriptors (DTDs) with aspect-ratio previews, CVT-RB / **Optimize timings** (CVT-RB1 safe-blanking exact-Hz auto-tuner), custom blanking/sync/polarity controls, and real-time pixel clock / bandwidth validation. |
 | **Established & Standard** | Toggle legacy Established Timings (grouped by standard) and inspect Standard Timings. |
 | **Extension Blocks** | Decode CTA-861 revision, audio/YCbCr flags, data blocks, and read-only extension DTDs. |
 | **Raw EDID** | Per-128-byte block hex dump with live checksum verification (`CHECKSUMS OK` / `BAD CHECKSUM`). |

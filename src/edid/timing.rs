@@ -268,50 +268,54 @@ pub fn cvt_rb(hactive: u16, vactive: u16, refresh: f64) -> Timing {
     }
 }
 
-/// Computes optimal VESA CVT-RB2-based timings (blanking, sync, polarity and
-/// 10 kHz-aligned pixel clock) for the target resolution and refresh rate.
-/// Searches nearby valid blanking totals to minimize refresh-rate rounding error
-/// while keeping pixel clock as low as possible and respecting EDID limits.
+/// Computes optimal VESA CVT-RB1-safe timings (blanking >= 160 px, 460 µs VBI,
+/// preserved sync polarity and 10 kHz-aligned pixel clock) for the target
+/// resolution and refresh rate. Preserves `current`'s polarity, physical size
+/// and safe sync widths so monitors keep accurate RGB color signaling.
 pub fn optimize(
-    hactive: u16,
-    vactive: u16,
+    current: &Timing,
     target_hz: f64,
     max_clock_khz: u32,
     max_hfreq_khz: u32,
-    size_mm: (u16, u16),
 ) -> Timing {
-    let hactive = hactive.max(64);
-    let vactive = vactive.max(64);
+    let hactive = current.hactive.max(64);
+    let vactive = current.vactive.max(64);
     let target_hz = target_hz.clamp(20.0, 480.0);
 
-    let vsync = vsync_for_aspect(hactive, vactive);
+    let vsync = if current.vsync >= 3 && current.vsync <= 12 {
+        current.vsync
+    } else {
+        vsync_for_aspect(hactive, vactive)
+    };
     let min_vbi_460us = ((460.0e-6 * target_hz * vactive as f64)
         / (1.0 - 460.0e-6 * target_hz).max(0.1))
     .ceil() as u16;
-    let safe_vblank_min = min_vbi_460us.max(vsync + 9);
-    let tight_vblank_min = vsync + 5;
+    let safe_vblank_min = min_vbi_460us.max(vsync + 12).max(20);
 
-    let (hsize_mm, vsize_mm) = if size_mm.0 > 0 && size_mm.1 > 0 {
-        size_mm
+    let (hsize_mm, vsize_mm) = if current.hsize_mm > 0 && current.vsize_mm > 0 {
+        (current.hsize_mm, current.vsize_mm)
     } else {
         default_size_mm(hactive, vactive)
     };
 
-    let mut best_score = (u8::MAX, u8::MAX, u32::MAX, u32::MAX, u16::MAX);
+    let mut best_score = (u8::MAX, u32::MAX, u32::MAX, u16::MAX);
     let mut best_timing: Option<Timing> = None;
 
-    // Candidate horizontal blanking values: start at CVT-RB2 (80 px), then
-    // multiples of 8 up to 240, plus tight fallback (48..72) for extreme Hz.
-    let mut hblanks: Vec<u16> = (80..=240).step_by(8).collect();
-    hblanks.extend((48..80).step_by(8));
+    // Safe horizontal blanking >= 160 px (CVT-RB1 floor) in even steps up to 320,
+    // including the monitor's current hblank when >= 160.
+    let mut hblanks: Vec<u16> = (160..=320).step_by(4).collect();
+    if current.hblank >= 160 && !hblanks.contains(&current.hblank) {
+        hblanks.push(current.hblank);
+    }
+
+    let v_start = safe_vblank_min;
+    let v_end = safe_vblank_min.max(current.vblank).saturating_add(28);
 
     for hblank in hblanks {
         let htotal = hactive as u32 + hblank as u32;
         if htotal == 0 {
             continue;
         }
-        let v_start = tight_vblank_min;
-        let v_end = safe_vblank_min.saturating_add(36);
 
         for vblank in v_start..=v_end {
             let vtotal = vactive as u32 + vblank as u32;
@@ -329,22 +333,26 @@ pub fn optimize(
                 (max_clock_khz > 0 && clk_khz > max_clock_khz)
                     || (max_hfreq_khz > 0 && hfreq > max_hfreq_khz as f64),
             );
-            let tight_penalty = u8::from(hblank < 80 || vblank < safe_vblank_min);
-            // Bucket error to 0.001 Hz so exact matches win cleanly over slightly lower clocks.
             let err_milli = (hz_err * 1000.0).round().min(u32::MAX as f64) as u32;
-            let rb2_dist = hblank.abs_diff(80);
+            let rb1_dist = hblank.abs_diff(160);
 
-            let score = (over_display, tight_penalty, err_milli, clk_khz, rb2_dist);
+            let score = (over_display, err_milli, clk_khz, rb1_dist);
             if score < best_score {
                 best_score = score;
-                let (hfront, hsync) = if hblank >= 160 {
-                    (48, 32)
-                } else if hblank >= 80 {
-                    (8, 32)
+                let (hfront, hsync) = if hblank == current.hblank
+                    && current.hfront >= 24
+                    && current.hsync >= 24
+                    && current.hfront + current.hsync + 32 <= hblank
+                {
+                    (current.hfront, current.hsync)
                 } else {
-                    (8, (hblank / 2).clamp(16, 32))
+                    (48, 32)
                 };
-                let vfront = (vblank.saturating_sub(vsync + 6)).clamp(1, 4);
+                let vfront = if current.vfront >= 3 && current.vfront + vsync + 6 <= vblank {
+                    current.vfront
+                } else {
+                    3.min(vblank.saturating_sub(vsync + 6)).max(1)
+                };
                 best_timing = Some(Timing {
                     pixel_clock_khz: clk_khz,
                     hactive,
@@ -357,13 +365,13 @@ pub fn optimize(
                     vsync,
                     hsize_mm,
                     vsize_mm,
-                    hborder: 0,
-                    vborder: 0,
+                    hborder: current.hborder,
+                    vborder: current.vborder,
                     interlaced: false,
-                    hsync_positive: true,
-                    vsync_positive: false,
-                    stereo: 0,
-                    sync_type: SyncType::DigitalSeparate,
+                    hsync_positive: current.hsync_positive,
+                    vsync_positive: current.vsync_positive,
+                    stereo: current.stereo,
+                    sync_type: current.sync_type,
                 });
             }
         }
@@ -373,6 +381,8 @@ pub fn optimize(
         let mut t = cvt_rb(hactive, vactive, target_hz);
         t.hsize_mm = hsize_mm;
         t.vsize_mm = vsize_mm;
+        t.hsync_positive = current.hsync_positive;
+        t.vsync_positive = current.vsync_positive;
         t
     })
 }
@@ -533,16 +543,23 @@ mod tests {
 
     #[test]
     fn optimize_hits_exact_144hz_with_valid_blanking() {
-        let t = optimize(1920, 1080, 144.0, 0, 0, (527, 296));
-        assert_eq!((t.hsize_mm, t.vsize_mm), (527, 296));
+        let base = Timing::default();
+        let t = optimize(&base, 144.0, 0, 0);
+        assert_eq!((t.hsize_mm, t.vsize_mm), (base.hsize_mm, base.vsize_mm));
+        assert_eq!(
+            (t.hsync_positive, t.vsync_positive),
+            (base.hsync_positive, base.vsync_positive)
+        );
+        assert!(t.hblank >= 160, "hblank={}", t.hblank);
         assert!((t.frame_hz() - 144.0).abs() < 0.002, "hz={}", t.frame_hz());
         assert!(t.validate(0, 0).is_valid());
-        assert!(t.pixel_clock_khz <= 345_000, "clock={}", t.pixel_clock_khz);
     }
 
     #[test]
     fn optimize_fits_1080p240_within_edid_limit() {
-        let t = optimize(1920, 1080, 240.0, 0, 0, (0, 0));
+        let base = Timing::default();
+        let t = optimize(&base, 240.0, 0, 0);
+        assert!(t.hblank >= 160, "hblank={}", t.hblank);
         assert!(t.validate(0, 0).is_valid());
         assert!(t.pixel_clock_khz <= 655_350);
         assert!((t.frame_hz() - 240.0).abs() < 0.05, "hz={}", t.frame_hz());

@@ -1650,17 +1650,14 @@ impl App {
                             true,
                         )
                         .on_hover_text(
-                            "Auto-calculate optimal VESA CVT-RB2 blanking, sync and exact pixel clock for this resolution and refresh rate",
+                            "Auto-calculate safe CVT-RB1 blanking (>= 160 px) and exact pixel clock while preserving your monitor's sync polarity",
                         );
                         if opt_resp.clicked() {
-                            let size_mm = (editor.timing.hsize_mm, editor.timing.vsize_mm);
                             editor.timing = timing::optimize(
-                                editor.timing.hactive,
-                                editor.timing.vactive,
+                                &editor.timing,
                                 editor.refresh_target as f64,
                                 max_clock,
                                 max_hfreq,
-                                size_mm,
                             );
                             editor.preset = 0;
                         }
