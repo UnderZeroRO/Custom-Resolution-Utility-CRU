@@ -1642,6 +1642,28 @@ impl App {
                         if theme::primary_button(ui, p, "Save", validation.is_valid()).clicked() {
                             save = true;
                         }
+                        let opt_resp = theme::ghost_button_icon(
+                            ui,
+                            p,
+                            Icon::Logo,
+                            "Optimize timings",
+                            true,
+                        )
+                        .on_hover_text(
+                            "Auto-calculate optimal VESA CVT-RB2 blanking, sync and exact pixel clock for this resolution and refresh rate",
+                        );
+                        if opt_resp.clicked() {
+                            let size_mm = (editor.timing.hsize_mm, editor.timing.vsize_mm);
+                            editor.timing = timing::optimize(
+                                editor.timing.hactive,
+                                editor.timing.vactive,
+                                editor.refresh_target as f64,
+                                max_clock,
+                                max_hfreq,
+                                size_mm,
+                            );
+                            editor.preset = 0;
+                        }
                     });
                 });
             });
@@ -1713,14 +1735,17 @@ impl FormatPreview {
 
 fn frame_preview(ui: &mut Ui, p: &Palette, t: &Timing) {
     let text = format!(
-        "{}  ·  H total {}  ·  V total {}  ·  {:.2} MHz  ·  {:.1} kHz",
-        t.label(),
+        "{}x{} @ {:.3} Hz  ·  H {}  ·  V {}  ·  {:.2} MHz  ·  {:.1} kHz  ·  {:.2} Gbps",
+        t.hactive,
+        t.vactive,
+        t.frame_hz(),
         t.htotal(),
         t.vtotal(),
         t.pixel_clock_khz as f64 / 1000.0,
-        t.hfreq_khz()
+        t.hfreq_khz(),
+        t.bandwidth_gbps(),
     );
-    ui.label(RichText::new(text).size(12.0).color(p.muted));
+    ui.label(RichText::new(text).size(11.5).color(p.muted));
 }
 
 fn dialog_frame(p: Palette) -> Frame {
@@ -1952,5 +1977,13 @@ mod tests {
         let (_, first) = doc.detailed()[0];
         assert_eq!((first.hactive, first.vactive), (1280, 720));
         assert!(!doc.dirty());
+    }
+
+    #[test]
+    fn editor_dialog_renders_with_optimize_button() {
+        let mut app = sample_app(ThemeMode::Dark);
+        app.open_editor(Some(0));
+        let out = run_frame(&mut app, 1120.0, 720.0);
+        assert!(!out.shapes.is_empty());
     }
 }
