@@ -421,9 +421,39 @@ pub struct RangeLimits {
 }
 
 impl RangeLimits {
+    /// Builds sensible default range limits derived from existing detailed timings.
+    pub fn from_timings(timings: &[Timing]) -> Self {
+        let mut min_v = 48u8;
+        let mut max_v = 144u8;
+        let mut min_h = 30u8;
+        let mut max_h = 250u8;
+        let mut max_clock_10mhz = 60u8;
+
+        for t in timings {
+            let hz = t.frame_hz().round().clamp(1.0, 255.0) as u8;
+            let hkhz = t.hfreq_khz().ceil().clamp(1.0, 255.0) as u8;
+            let clock_10 = ((t.pixel_clock_khz + 9_999) / 10_000).clamp(1, 255) as u8;
+            min_v = min_v.min(hz);
+            max_v = max_v.max(hz);
+            min_h = min_h.min(hkhz);
+            max_h = max_h.max(hkhz);
+            max_clock_10mhz = max_clock_10mhz.max(clock_10);
+        }
+
+        Self {
+            min_v,
+            max_v,
+            min_h,
+            max_h,
+            max_clock_10mhz,
+            flags: 0x00,
+            padding: [0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20],
+        }
+    }
+
     pub fn label(&self) -> String {
         format!(
-            "{}â€“{} Hz vertical, {}â€“{} kHz horizontal, {:.2} MHz max clock",
+            "{}–{} Hz vertical, {}–{} kHz horizontal, {:.2} MHz max clock",
             self.min_v,
             self.max_v,
             self.min_h,
@@ -789,5 +819,33 @@ mod tests {
         e.base.descriptors[idx] = Descriptor::Dummy;
         let reparsed = Edid::parse(&e.serialize()).unwrap();
         assert_eq!(reparsed.detailed_timings().len(), initial_count - 1);
+    }
+
+    #[test]
+    fn range_limits_edit_roundtrips() {
+        let data = hex(SAM0D46);
+        let mut e = Edid::parse(&data).unwrap();
+        let slot = e
+            .base
+            .descriptors
+            .iter()
+            .position(|d| matches!(d, Descriptor::RangeLimits(_)))
+            .unwrap_or_else(|| e.free_descriptor_slot().expect("slot for range limits"));
+
+        let rl = RangeLimits {
+            min_v: 48,
+            max_v: 165,
+            min_h: 30,
+            max_h: 255,
+            max_clock_10mhz: 70,
+            flags: 0x00,
+            padding: [0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20],
+        };
+        e.base.descriptors[slot] = Descriptor::RangeLimits(rl);
+
+        let reparsed = Edid::parse(&e.serialize()).unwrap();
+        assert_eq!(reparsed.max_pixel_clock_khz(), 700_000);
+        assert_eq!(reparsed.max_hfreq_khz(), 255);
+        assert!(reparsed.checksum_ok().iter().all(|ok| *ok));
     }
 }

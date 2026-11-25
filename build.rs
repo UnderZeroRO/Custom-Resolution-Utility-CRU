@@ -49,8 +49,42 @@ fn main() {
 
     let rc_path = out_dir.join("cru-modern.rc");
     let ico_escaped = ico_path.to_string_lossy().replace('\\', "/");
-    std::fs::write(&rc_path, format!("1 ICON \"{ico_escaped}\"\n"))
-        .expect("failed to write .rc file");
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
+    let mut parts = version.split('.').map(|s| s.parse::<u16>().unwrap_or(0));
+    let (maj, min, pat) = (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(1),
+        parts.next().unwrap_or(0),
+    );
+    let rc_content = format!(
+        "1 ICON \"{ico_escaped}\"\n\
+         \n\
+         1 VERSIONINFO\n\
+         FILEVERSION {maj},{min},{pat},0\n\
+         PRODUCTVERSION {maj},{min},{pat},0\n\
+         FILEOS 0x40004\n\
+         FILETYPE 0x1\n\
+         BEGIN\n\
+           BLOCK \"StringFileInfo\"\n\
+           BEGIN\n\
+             BLOCK \"040904B0\"\n\
+             BEGIN\n\
+               VALUE \"CompanyName\", \"UnderZeroRO\"\n\
+               VALUE \"FileDescription\", \"CRU Modern - Custom Resolution Utility (EDID Editor)\"\n\
+               VALUE \"FileVersion\", \"{version}.0\"\n\
+               VALUE \"InternalName\", \"cru-modern\"\n\
+               VALUE \"OriginalFilename\", \"cru-modern.exe\"\n\
+               VALUE \"ProductName\", \"CRU Modern\"\n\
+               VALUE \"ProductVersion\", \"{version}.0\"\n\
+             END\n\
+           END\n\
+           BLOCK \"VarFileInfo\"\n\
+           BEGIN\n\
+             VALUE \"Translation\", 0x0409, 1200\n\
+           END\n\
+         END\n"
+    );
+    std::fs::write(&rc_path, rc_content).expect("failed to write .rc file");
 
     let Some(windres) = find_windres() else {
         println!("cargo:warning=windres.exe not found; skipping .exe icon resource");

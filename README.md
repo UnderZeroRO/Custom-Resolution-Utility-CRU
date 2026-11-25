@@ -22,7 +22,7 @@ CRU Modern reads and writes Windows `EDID_OVERRIDE` entries directly in the regi
 |---|---|
 | **Display Sidebar** | Enumerates active displays (`EnumDisplayDevicesW`) and inactive registry entries (`HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY`), showing active mode, override badge, and quick `.bin` import/export. |
 | **Hero Summary** | Displays scaled monitor illustration, manufacturer/hardware ID/product code/serial metadata, EDID version, block count, signal type, and one-click **Remove override**. |
-| **Detailed Resolutions** | Add, edit, delete, and reorder Detailed Timing Descriptors (DTDs) with aspect-ratio previews, CVT-RB / **Optimize timings** (CVT-RB1 safe-blanking exact-Hz auto-tuner), custom blanking/sync/polarity controls, and real-time pixel clock / bandwidth validation. |
+| **Detailed Resolutions** | Add, edit, delete, and reorder Detailed Timing Descriptors (DTDs) with aspect-ratio previews, CVT-RB / **Optimize timings** (native-geometry-preserving exact-Hz solver), custom blanking/sync/polarity controls, real-time pixel clock & bandwidth validation, and an inline **Range limits** editor (V-rate, H-rate, max pixel clock). |
 | **Established & Standard** | Toggle legacy Established Timings (grouped by standard) and inspect Standard Timings. |
 | **Extension Blocks** | Decode CTA-861 revision, audio/YCbCr flags, data blocks, and read-only extension DTDs. |
 | **Raw EDID** | Per-128-byte block hex dump with live checksum verification (`CHECKSUMS OK` / `BAD CHECKSUM`). |
@@ -39,11 +39,11 @@ CRU Modern reads and writes Windows `EDID_OVERRIDE` entries directly in the regi
 
 ### Usage
 
-1. Download `cru-modern.exe` from the [Releases](https://github.com/UnderZeroRO/cru-modern/releases) page (or build from source below) and run it anywhere — it is completely portable.
+1. Download `cru-modern.exe` from the [Releases](https://github.com/UnderZeroRO/Custom-Resolution-Utility-CRU/releases) page (or build from source below) and run it anywhere — it is completely portable.
 2. Select a display from the left sidebar.
 3. Add or edit timings in **Detailed resolutions** (or toggle modes under **Established**).
 4. Click **Apply** to write `Device Parameters\EDID_OVERRIDE` (`0`, `1`, … 128-byte `REG_BINARY` blocks).
-5. Confirm **Repornește acum** (Restart driver) when prompted — the app exits briefly while its helper cycles the display adapter (`SetupAPI`), then relaunches automatically with the updated EDID active.
+5. Confirm **Restart now** when prompted — the app exits briefly while its helper cycles the display adapter (`SetupAPI`), then relaunches automatically with the updated EDID active.
 6. To revert back to your monitor's hardware EDID, click **Remove override** in the hero card and restart the driver.
 
 ---

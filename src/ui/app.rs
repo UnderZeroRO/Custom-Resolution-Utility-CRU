@@ -7,7 +7,9 @@ use egui::{
     RichText, Sense, Stroke, StrokeKind, TextStyle, Ui, Vec2,
 };
 
-use cru_modern::edid::{cea::Cta, timing, Descriptor, Edid, Timing, ESTABLISHED_GROUPS, ESTABLISHED_MODES};
+use cru_modern::edid::{
+    cea::Cta, timing, Descriptor, Edid, RangeLimits, Timing, ESTABLISHED_GROUPS, ESTABLISHED_MODES,
+};
 use cru_modern::system::{self, DisplayInfo};
 
 use super::icons::{self, Icon};
@@ -16,6 +18,36 @@ use super::theme::{self, Palette, ThemeMode, HAIRLINE, RADIUS_CARD};
 use super::win;
 
 pub const APP_TITLE: &str = "CRU Modern";
+
+fn theme_settings_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("cru-modern").join("theme.txt"))
+}
+
+fn load_saved_theme() -> ThemeMode {
+    let Some(path) = theme_settings_path() else {
+        return ThemeMode::Dark;
+    };
+    match std::fs::read_to_string(path).ok().as_deref().map(str::trim) {
+        Some("light") => ThemeMode::Light,
+        _ => ThemeMode::Dark,
+    }
+}
+
+fn save_theme(mode: ThemeMode) {
+    let Some(path) = theme_settings_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let value = match mode {
+        ThemeMode::Dark => "dark",
+        ThemeMode::Light => "light",
+    };
+    let _ = std::fs::write(path, value);
+}
 
 /// Minimal debug trace, active only in debug builds. Used to verify UI wiring
 /// without guessing from screenshots.
@@ -142,8 +174,9 @@ const TABS: [(&str, Icon); 4] = [
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let initial_mode = load_saved_theme();
         theme::load_fonts(&cc.egui_ctx);
-        theme::apply_style(&cc.egui_ctx, ThemeMode::Dark);
+        theme::apply_style(&cc.egui_ctx, initial_mode);
 
         let displays = system::enumerate_displays();
         let selected = displays.iter().position(|d| d.active).or(if displays.is_empty() {
@@ -157,7 +190,7 @@ impl App {
             selected,
             doc: None,
             tab: 0,
-            mode: ThemeMode::Dark,
+            mode: initial_mode,
             selected_timing: None,
             editor: None,
             toast: None,
@@ -171,7 +204,7 @@ impl App {
         app.load_document();
         if let Some(result) = system::take_last_restart(Duration::from_secs(180)) {
             match result {
-                Ok(message) => app.notify(format!("{message}. Noul EDID este activ."), false),
+                Ok(message) => app.notify(format!("{message}. The new EDID is now active."), false),
                 Err(err) => app.notify(err, true),
             }
         }
@@ -606,6 +639,7 @@ impl App {
                     ThemeMode::Dark => ThemeMode::Light,
                     ThemeMode::Light => ThemeMode::Dark,
                 };
+                save_theme(self.mode);
                 theme::apply_style(ctx, self.mode);
                 win::set_dark_titlebar(APP_TITLE, self.mode == ThemeMode::Dark);
             }
@@ -1064,125 +1098,264 @@ impl App {
     }
 
     fn detailed_tab(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
-        let Some(doc) = &self.doc else { return };
-        let rows = doc.detailed();
-        let max_clock = doc.edid.max_pixel_clock_khz();
-        let max_hfreq = doc.edid.max_hfreq_khz();
+        let (rows, max_clock, max_hfreq) = {
+            let Some(doc) = &self.doc else { return };
+            (
+                doc.detailed(),
+                doc.edid.max_pixel_clock_khz(),
+                doc.edid.max_hfreq_khz(),
+            )
+        };
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                theme::card_panel(ui, *p, |ui| {
+                    ui.horizontal(|ui| {
+                        theme::section_title(ui, *p, "Detailed resolutions");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let preview = FormatPreview {
+                                max_clock,
+                                max_hfreq,
+                            };
+                            preview.show(ui, *p);
+                        });
+                    });
+
+                    let w = ui.available_width();
+                    let c0 = (w * 0.30).clamp(155.0, 210.0);
+                    let c1 = (w * 0.16).clamp(88.0, 118.0);
+                    let c2 = (w * 0.17).clamp(92.0, 122.0);
+                    let c3 = (w * 0.25).clamp(130.0, 185.0);
+                    let c4 = (w - c0 - c1 - c2 - c3).max(52.0);
+                    let columns = theme::Columns::new(&[c0, c1, c2, c3, c4]);
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        for (index, cell) in
+                            ["Resolution", "Refresh", "Clock", "Sync", "Polarity"]
+                                .iter()
+                                .enumerate()
+                        {
+                            let width = columns.widths.get(index).copied().unwrap_or(100.0);
+                            ui.allocate_ui(Vec2::new(width, 18.0), |ui| {
+                                ui.label(RichText::new(*cell).size(11.0).color(p.faint));
+                            });
+                        }
+                    });
+                    theme::divider(ui, *p);
+
+                    if rows.is_empty() {
+                        ui.add_space(10.0);
+                        theme::muted(ui, p, "No detailed resolutions in the base block.");
+                        ui.add_space(10.0);
+                    }
+
+                    let mut clicked = None;
+                    for (descriptor_index, timing) in &rows {
+                        let selected = self.selected_timing == Some(*descriptor_index);
+                        let ar = if timing.vactive > 0 {
+                            timing.hactive as f32 / timing.vactive as f32
+                        } else {
+                            16.0 / 9.0
+                        };
+                        let cells = [
+                            format!(
+                                "{} × {}{}",
+                                timing.hactive,
+                                timing.vactive,
+                                if timing.interlaced { "i" } else { "" }
+                            ),
+                            format!("{:.2} Hz", timing.frame_hz()),
+                            format!("{:.2} MHz", timing.pixel_clock_khz as f64 / 1000.0),
+                            timing.sync_label(),
+                            timing.polarity_label().to_string(),
+                        ];
+                        let response = theme::table_row(
+                            ui,
+                            *p,
+                            Id::new(("timing", descriptor_index)),
+                            &cells,
+                            &columns,
+                            selected,
+                            true,
+                            32.0,
+                            13.0,
+                            Some(ar),
+                        );
+                        if response.clicked() {
+                            clicked = Some(*descriptor_index);
+                        }
+                        if response.double_clicked() {
+                            actions.push(Action::OpenEditor(Some(*descriptor_index)));
+                        }
+                    }
+                    if let Some(index) = clicked {
+                        self.selected_timing = Some(index);
+                    }
+
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if theme::ghost_button_icon(ui, p, Icon::Plus, "Add…", true).clicked() {
+                            actions.push(Action::OpenEditor(None));
+                        }
+                        let selected = self.selected_timing;
+                        if theme::ghost_button(ui, p, "Edit…", selected.is_some()).clicked() {
+                            if let Some(index) = selected {
+                                actions.push(Action::OpenEditor(Some(index)));
+                            }
+                        }
+                        if theme::ghost_button_icon(
+                            ui,
+                            p,
+                            Icon::Minus,
+                            "Delete",
+                            selected.is_some(),
+                        )
+                        .clicked()
+                        {
+                            if let Some(index) = selected {
+                                actions.push(Action::DeleteTiming(index));
+                            }
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if theme::icon_button(ui, p, Icon::ArrowDown, "Move down").clicked() {
+                                if let Some(index) = selected {
+                                    actions.push(Action::MoveTiming(index, 1));
+                                }
+                            }
+                            if theme::icon_button(ui, p, Icon::ArrowUp, "Move up").clicked() {
+                                if let Some(index) = selected {
+                                    actions.push(Action::MoveTiming(index, -1));
+                                }
+                            }
+                        });
+                    });
+                });
+
+                ui.add_space(10.0);
+                self.range_limits_card(ui, p);
+            });
+    }
+
+    /// Inline editor for the monitor's Range Limits descriptor (tag 0xFD).
+    /// Shows min/max vertical Hz, min/max horizontal kHz, and max pixel clock.
+    fn range_limits_card(&mut self, ui: &mut Ui, p: &Palette) {
+        let Some(doc) = &mut self.doc else { return };
+
+        // Find the RangeLimits descriptor index and a clone for editing.
+        let rl_slot: Option<(usize, RangeLimits)> = doc
+            .edid
+            .base
+            .descriptors
+            .iter()
+            .enumerate()
+            .find_map(|(i, d)| {
+                if let Descriptor::RangeLimits(r) = d {
+                    Some((i, r.clone()))
+                } else {
+                    None
+                }
+            });
 
         theme::card_panel(ui, *p, |ui| {
-            ui.horizontal(|ui| {
-                theme::section_title(ui, *p, "Detailed resolutions");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let preview = FormatPreview {
-                        max_clock,
-                        max_hfreq,
-                    };
-                    preview.show(ui, *p);
-                });
-            });
+            theme::section_title(ui, *p, "Range limits");
+            ui.add_space(4.0);
 
-            let w = ui.available_width();
-            let c0 = (w * 0.30).clamp(155.0, 210.0);
-            let c1 = (w * 0.16).clamp(88.0, 118.0);
-            let c2 = (w * 0.17).clamp(92.0, 122.0);
-            let c3 = (w * 0.25).clamp(130.0, 185.0);
-            let c4 = (w - c0 - c1 - c2 - c3).max(52.0);
-            let columns = theme::Columns::new(&[c0, c1, c2, c3, c4]);
+            if let Some((slot_index, mut rl)) = rl_slot {
+                let mut changed = false;
 
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                for (index, cell) in ["Resolution", "Refresh", "Clock", "Sync", "Polarity"]
-                    .iter()
-                    .enumerate()
-                {
-                    let width = columns.widths.get(index).copied().unwrap_or(100.0);
-                    ui.allocate_ui(Vec2::new(width, 18.0), |ui| {
-                        ui.label(RichText::new(*cell).size(11.0).color(p.faint));
+                egui::Grid::new("range_limits_grid")
+                    .num_columns(2)
+                    .spacing([16.0, 6.0])
+                    .show(ui, |ui| {
+                        // Vertical Hz
+                        ui.label(RichText::new("Vertical (Hz)").size(12.5).color(p.text));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("min").size(11.5).color(p.muted));
+                            if ui
+                                .add(egui::DragValue::new(&mut rl.min_v).range(1u8..=rl.max_v).speed(1))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            ui.label(RichText::new("max").size(11.5).color(p.muted));
+                            if ui
+                                .add(egui::DragValue::new(&mut rl.max_v).range(rl.min_v..=u8::MAX).speed(1))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.end_row();
+
+                        // Horizontal kHz
+                        ui.label(RichText::new("Horizontal (kHz)").size(12.5).color(p.text));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("min").size(11.5).color(p.muted));
+                            if ui
+                                .add(egui::DragValue::new(&mut rl.min_h).range(1u8..=rl.max_h).speed(1))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            ui.label(RichText::new("max").size(11.5).color(p.muted));
+                            if ui
+                                .add(egui::DragValue::new(&mut rl.max_h).range(rl.min_h..=u8::MAX).speed(1))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.end_row();
+
+                        // Max pixel clock (stored in 10 MHz units, 1 unit = 10 MHz)
+                        ui.label(RichText::new("Max pixel clock").size(12.5).color(p.text));
+                        ui.horizontal(|ui| {
+                            let mut clock_mhz = rl.max_clock_10mhz as u32 * 10;
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut clock_mhz)
+                                        .range(10u32..=2550u32)
+                                        .speed(10)
+                                        .suffix(" MHz"),
+                                )
+                                .changed()
+                            {
+                                // Round up to nearest 10 MHz boundary.
+                                rl.max_clock_10mhz = ((clock_mhz + 9) / 10).min(255) as u8;
+                                changed = true;
+                            }
+                        });
+                        ui.end_row();
                     });
-                }
-            });
-            theme::divider(ui, *p);
 
-            if rows.is_empty() {
-                ui.add_space(10.0);
-                theme::muted(ui, p, "No detailed resolutions in the base block.");
-                ui.add_space(10.0);
-            }
-
-            let mut clicked = None;
-            for (descriptor_index, timing) in &rows {
-                let selected = self.selected_timing == Some(*descriptor_index);
-                let ar = if timing.vactive > 0 {
-                    timing.hactive as f32 / timing.vactive as f32
-                } else {
-                    16.0 / 9.0
-                };
-                let cells = [
-                    format!(
-                        "{} × {}{}",
-                        timing.hactive,
-                        timing.vactive,
-                        if timing.interlaced { "i" } else { "" }
-                    ),
-                    format!("{:.2} Hz", timing.frame_hz()),
-                    format!("{:.2} MHz", timing.pixel_clock_khz as f64 / 1000.0),
-                    timing.sync_label(),
-                    timing.polarity_label().to_string(),
-                ];
-                let response = theme::table_row(
-                    ui,
-                    *p,
-                    Id::new(("timing", descriptor_index)),
-                    &cells,
-                    &columns,
-                    selected,
-                    true,
-                    32.0,
-                    13.0,
-                    Some(ar),
-                );
-                if response.clicked() {
-                    clicked = Some(*descriptor_index);
-                }
-                if response.double_clicked() {
-                    actions.push(Action::OpenEditor(Some(*descriptor_index)));
-                }
-            }
-            if let Some(index) = clicked {
-                self.selected_timing = Some(index);
-            }
-
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if theme::ghost_button_icon(ui, p, Icon::Plus, "Add…", true).clicked() {
-                    actions.push(Action::OpenEditor(None));
-                }
-                let selected = self.selected_timing;
-                if theme::ghost_button(ui, p, "Edit…", selected.is_some()).clicked() {
-                    if let Some(index) = selected {
-                        actions.push(Action::OpenEditor(Some(index)));
+                if changed {
+                    if let Some(Descriptor::RangeLimits(dst)) =
+                        doc.edid.base.descriptors.get_mut(slot_index)
+                    {
+                        *dst = rl;
                     }
                 }
-                if theme::ghost_button_icon(ui, p, Icon::Minus, "Delete", selected.is_some())
-                    .clicked()
-                {
-                    if let Some(index) = selected {
-                        actions.push(Action::DeleteTiming(index));
-                    }
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if theme::icon_button(ui, p, Icon::ArrowDown, "Move down").clicked() {
-                        if let Some(index) = selected {
-                            actions.push(Action::MoveTiming(index, 1));
-                        }
-                    }
-                    if theme::icon_button(ui, p, Icon::ArrowUp, "Move up").clicked() {
-                        if let Some(index) = selected {
-                            actions.push(Action::MoveTiming(index, -1));
-                        }
+
+                ui.add_space(4.0);
+                theme::muted(ui, p, "Changes apply when you save the EDID override.");
+            } else {
+                let free_slot = doc.edid.free_descriptor_slot();
+                ui.horizontal(|ui| {
+                    theme::muted(ui, p, "No Range Limits descriptor found in this EDID.");
+                    if let Some(slot) = free_slot {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if theme::ghost_button_icon(ui, p, Icon::Plus, "Add range limits", true)
+                                .clicked()
+                            {
+                                let rl = RangeLimits::from_timings(&doc.edid.detailed_timings());
+                                doc.edid.base.descriptors[slot] = Descriptor::RangeLimits(rl);
+                            }
+                        });
                     }
                 });
-            });
+            }
         });
     }
 
@@ -2012,5 +2185,31 @@ mod tests {
         assert_eq!(doc.detailed().len(), before - 1);
         assert!(doc.dirty());
         assert!(app.selected_timing.is_none());
+    }
+
+    #[test]
+    fn range_limits_card_renders_and_updates_dirty_state() {
+        let mut app = sample_app(ThemeMode::Dark);
+        {
+            let doc = app.doc.as_mut().unwrap();
+            let rl_slot = doc
+                .edid
+                .base
+                .descriptors
+                .iter()
+                .position(|d| matches!(d, Descriptor::RangeLimits(_)));
+            if let Some(idx) = rl_slot {
+                if let Descriptor::RangeLimits(ref mut rl) = doc.edid.base.descriptors[idx] {
+                    rl.max_v = rl.max_v.saturating_add(10);
+                }
+            } else {
+                let slot = doc.edid.free_descriptor_slot().expect("free slot");
+                let rl = RangeLimits::from_timings(&doc.edid.detailed_timings());
+                doc.edid.base.descriptors[slot] = Descriptor::RangeLimits(rl);
+            }
+            assert!(doc.dirty());
+        }
+        let out = run_frame(&mut app, 900.0, 560.0);
+        assert!(!out.shapes.is_empty());
     }
 }

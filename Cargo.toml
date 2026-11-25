@@ -1,6 +1,6 @@
 [package]
 name = "cru-modern"
-version = "0.1.0"
+version = "0.1.3"
 edition = "2021"
 description = "Modern UI for Custom Resolution Utility (EDID editor)"
 authors = ["CRU Modern"]
