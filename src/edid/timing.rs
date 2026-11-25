@@ -268,10 +268,15 @@ pub fn cvt_rb(hactive: u16, vactive: u16, refresh: f64) -> Timing {
     }
 }
 
-/// Computes optimal VESA CVT-RB1-safe timings (blanking >= 160 px, 460 µs VBI,
-/// preserved sync polarity and 10 kHz-aligned pixel clock) for the target
-/// resolution and refresh rate. Preserves `current`'s polarity, physical size
-/// and safe sync widths so monitors keep accurate RGB color signaling.
+/// Computes optimal timings for the target resolution and refresh rate.
+///
+/// Strategy:
+/// 1. First prefers keeping the monitor's own working blanking/sync geometry
+///    (`hblank`, `vblank`, `hfront`, `hsync`, `vfront`, `vsync`, polarity) with
+///    at most tiny increments to hit an exact `10 kHz` EDID pixel clock step —
+///    preventing overscan/cropping and color-space shifts on strict scalers.
+/// 2. Falls back to VESA CVT-RB1 (`hblank >= 160`) only if the native geometry
+///    exceeds EDID/display clock limits (or had oversized 50 Hz blanking).
 pub fn optimize(
     current: &Timing,
     target_hz: f64,
@@ -290,7 +295,6 @@ pub fn optimize(
     let min_vbi_460us = ((460.0e-6 * target_hz * vactive as f64)
         / (1.0 - 460.0e-6 * target_hz).max(0.1))
     .ceil() as u16;
-    let safe_vblank_min = min_vbi_460us.max(vsync + 12).max(20);
 
     let (hsize_mm, vsize_mm) = if current.hsize_mm > 0 && current.vsize_mm > 0 {
         (current.hsize_mm, current.vsize_mm)
@@ -298,82 +302,95 @@ pub fn optimize(
         default_size_mm(hactive, vactive)
     };
 
-    let mut best_score = (u8::MAX, u32::MAX, u32::MAX, u16::MAX);
+    let native_geometry_ok = (80..=360).contains(&current.hblank)
+        && current.vblank >= vsync + 6
+        && current.hfront + current.hsync < current.hblank
+        && current.vfront + current.vsync < current.vblank;
+
+    let mut best_score = (u8::MAX, u8::MAX, u32::MAX, u16::MAX, u32::MAX);
     let mut best_timing: Option<Timing> = None;
 
-    // Safe horizontal blanking >= 160 px (CVT-RB1 floor) in even steps up to 320,
-    // including the monitor's current hblank when >= 160.
-    let mut hblanks: Vec<u16> = (160..=320).step_by(4).collect();
-    if current.hblank >= 160 && !hblanks.contains(&current.hblank) {
-        hblanks.push(current.hblank);
-    }
-
-    let v_start = safe_vblank_min;
-    let v_end = safe_vblank_min.max(current.vblank).saturating_add(28);
-
-    for hblank in hblanks {
+    let mut eval = |hblank: u16, vblank: u16, tier: u8, geo_dist: u16| {
         let htotal = hactive as u32 + hblank as u32;
-        if htotal == 0 {
-            continue;
+        let vtotal = vactive as u32 + vblank as u32;
+        if htotal == 0 || vtotal == 0 {
+            return;
+        }
+        let ideal_hz = htotal as f64 * vtotal as f64 * target_hz;
+        let clk_khz = round_clock(ideal_hz);
+        if clk_khz > 655_350 {
+            return;
         }
 
-        for vblank in v_start..=v_end {
-            let vtotal = vactive as u32 + vblank as u32;
-            let ideal_hz = htotal as f64 * vtotal as f64 * target_hz;
-            let clk_khz = round_clock(ideal_hz);
-            if clk_khz > 655_350 {
-                continue;
+        let actual_hz = clk_khz as f64 * 1000.0 / (htotal as f64 * vtotal as f64);
+        let hz_err = (actual_hz - target_hz).abs();
+        let hfreq = clk_khz as f64 / htotal as f64;
+
+        let over_display = u8::from(
+            (max_clock_khz > 0 && clk_khz > max_clock_khz)
+                || (max_hfreq_khz > 0 && hfreq > max_hfreq_khz as f64),
+        );
+        let err_milli = (hz_err * 1000.0).round().min(u32::MAX as f64) as u32;
+
+        let score = (over_display, tier, err_milli, geo_dist, clk_khz);
+        if score < best_score {
+            best_score = score;
+            let (hfront, hsync) = if native_geometry_ok
+                && tier == 0
+                && current.hfront + current.hsync < hblank
+            {
+                (current.hfront, current.hsync)
+            } else {
+                (48, 32)
+            };
+            let vfront = if native_geometry_ok
+                && tier == 0
+                && current.vfront + vsync < vblank
+            {
+                current.vfront
+            } else {
+                3.min(vblank.saturating_sub(vsync + 6)).max(1)
+            };
+            best_timing = Some(Timing {
+                pixel_clock_khz: clk_khz,
+                hactive,
+                hblank,
+                vactive,
+                vblank,
+                hfront,
+                hsync,
+                vfront,
+                vsync,
+                hsize_mm,
+                vsize_mm,
+                hborder: current.hborder,
+                vborder: current.vborder,
+                interlaced: false,
+                hsync_positive: current.hsync_positive,
+                vsync_positive: current.vsync_positive,
+                stereo: current.stereo,
+                sync_type: current.sync_type,
+            });
+        }
+    };
+
+    // Tier 0: preserve native blanking/porches with at most tiny positive nudges
+    // so exact 10 kHz clock multiples don't alter image framing on the monitor.
+    if native_geometry_ok {
+        for dh in (0..=24u16).step_by(2) {
+            for dv in 0..=12u16 {
+                let hb = current.hblank.saturating_add(dh);
+                let vb = current.vblank.saturating_add(dv);
+                eval(hb, vb, 0, dh + dv);
             }
+        }
+    }
 
-            let actual_hz = clk_khz as f64 * 1000.0 / (htotal as f64 * vtotal as f64);
-            let hz_err = (actual_hz - target_hz).abs();
-            let hfreq = clk_khz as f64 / htotal as f64;
-
-            let over_display = u8::from(
-                (max_clock_khz > 0 && clk_khz > max_clock_khz)
-                    || (max_hfreq_khz > 0 && hfreq > max_hfreq_khz as f64),
-            );
-            let err_milli = (hz_err * 1000.0).round().min(u32::MAX as f64) as u32;
-            let rb1_dist = hblank.abs_diff(160);
-
-            let score = (over_display, err_milli, clk_khz, rb1_dist);
-            if score < best_score {
-                best_score = score;
-                let (hfront, hsync) = if hblank == current.hblank
-                    && current.hfront >= 24
-                    && current.hsync >= 24
-                    && current.hfront + current.hsync + 32 <= hblank
-                {
-                    (current.hfront, current.hsync)
-                } else {
-                    (48, 32)
-                };
-                let vfront = if current.vfront >= 3 && current.vfront + vsync + 6 <= vblank {
-                    current.vfront
-                } else {
-                    3.min(vblank.saturating_sub(vsync + 6)).max(1)
-                };
-                best_timing = Some(Timing {
-                    pixel_clock_khz: clk_khz,
-                    hactive,
-                    hblank,
-                    vactive,
-                    vblank,
-                    hfront,
-                    hsync,
-                    vfront,
-                    vsync,
-                    hsize_mm,
-                    vsize_mm,
-                    hborder: current.hborder,
-                    vborder: current.vborder,
-                    interlaced: false,
-                    hsync_positive: current.hsync_positive,
-                    vsync_positive: current.vsync_positive,
-                    stereo: current.stereo,
-                    sync_type: current.sync_type,
-                });
-            }
+    // Tier 1: safe VESA CVT-RB1 fallback (hblank >= 160) if Tier 0 exceeded clock limits.
+    let rb1_v_min = min_vbi_460us.max(vsync + 12).max(20);
+    for hblank in (160..=320).step_by(4) {
+        for vblank in rb1_v_min..=rb1_v_min.saturating_add(28) {
+            eval(hblank, vblank, 1, hblank.abs_diff(160));
         }
     }
 
@@ -550,7 +567,8 @@ mod tests {
             (t.hsync_positive, t.vsync_positive),
             (base.hsync_positive, base.vsync_positive)
         );
-        assert!(t.hblank >= 160, "hblank={}", t.hblank);
+        assert_eq!((t.hblank, t.vblank), (base.hblank, base.vblank));
+        assert_eq!((t.hfront, t.hsync, t.vfront, t.vsync), (base.hfront, base.hsync, base.vfront, base.vsync));
         assert!((t.frame_hz() - 144.0).abs() < 0.002, "hz={}", t.frame_hz());
         assert!(t.validate(0, 0).is_valid());
     }

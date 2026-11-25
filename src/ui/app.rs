@@ -1650,7 +1650,7 @@ impl App {
                             true,
                         )
                         .on_hover_text(
-                            "Auto-calculate safe CVT-RB1 blanking (>= 160 px) and exact pixel clock while preserving your monitor's sync polarity",
+                            "Auto-calculate exact pixel clock while preserving your monitor's native blanking, porches and sync polarity (falls back to CVT-RB1 only if needed)",
                         );
                         if opt_resp.clicked() {
                             editor.timing = timing::optimize(
