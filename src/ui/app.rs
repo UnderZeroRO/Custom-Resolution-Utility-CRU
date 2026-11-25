@@ -242,17 +242,17 @@ impl App {
     fn start_restart(&mut self, name: String) {
         debug_log(format!("start_restart name={name:?}"));
         if self.exit_at.is_some() {
-            self.notify("Restartul driverului e deja în desfășurare...", true);
+            self.notify("Driver restart is already in progress…", true);
             return;
         }
 
         match system::spawn_restart_helper() {
             Ok(()) => {
                 if name.is_empty() {
-                    self.notify("Se repornește driverul grafic. Aplicația va porni din nou automat...", false);
+                    self.notify("Restarting graphics driver. The app will relaunch automatically…", false);
                 } else {
                     self.notify(
-                        format!("Se repornește driverul grafic pentru {name}. Aplicația va porni din nou automat..."),
+                        format!("Restarting graphics driver for {name}. The app will relaunch automatically…"),
                         false,
                     );
                 }
@@ -281,7 +281,7 @@ fn request_select(&mut self, index: usize) {
         };
 
         if !admin {
-            self.notify("Drepturi de administrator necesare pentru a scrie substituirea EDID", true);
+            self.notify("Administrator rights required to write the EDID override", true);
             return;
         }
 
@@ -296,7 +296,7 @@ fn request_select(&mut self, index: usize) {
                     slot.override_edid = Some(self.doc.as_ref().unwrap().original.clone());
                 }
                 self.pending_restart = Some(name.clone());
-                self.notify(format!("Override scris pentru {name}. Repornești driverul pentru a-l activa."), false);
+                self.notify(format!("Override written for {name}. Restart the driver to activate it."), false);
             }
             Err(err) => self.notify(err, true),
         }
@@ -732,7 +732,7 @@ impl App {
                 );
                 ui.horizontal_centered(|ui| {
                     if self.exit_at.is_some() {
-                        theme::chip(ui, p, "SE REPORNESTE DRIVERUL", p.warning);
+                        theme::chip(ui, p, "RESTARTING DRIVER", p.warning);
                     } else if self.admin {
                         let (icon_rect, _) =
                             ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
@@ -1466,7 +1466,7 @@ impl App {
         if self.pending_restart.is_some() {
             let name = self.pending_restart.as_ref().unwrap().clone();
             let mut open = true;
-            egui::Window::new("Repornește driverul grafic?")
+            egui::Window::new("Restart graphics driver?")
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
@@ -1475,17 +1475,17 @@ impl App {
                 .show(ctx, |ui| {
                     ui.set_width(360.0);
                     ui.label(
-                        RichText::new(format!("Substituirea EDID pentru {name} este scrisă în registru. Repornești driverul acum pentru a o activa?"))
+                        RichText::new(format!("The EDID override for {name} has been written to the registry. Restart the driver now to activate it?"))
                             .size(13.0)
                             .color(p.text),
                     );
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        if theme::ghost_button(ui, p, "Mai târziu", true).clicked() {
+                        if theme::ghost_button(ui, p, "Later", true).clicked() {
                             self.pending_restart = None;
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if theme::primary_button(ui, p, "Repornește acum", true).clicked() {
+                            if theme::primary_button(ui, p, "Restart now", true).clicked() {
                                 // Keep `pending_restart` populated: `ConfirmRestart`
                                 // takes the display name from it to build the status
                                 // message. Clearing it here made the confirmation a
@@ -1925,7 +1925,7 @@ mod tests {
             selected_timing: Some(0),
             editor: None,
             toast: Some(Toast {
-                text: "Override scris pentru Samsung Odyssey.".to_string(),
+                text: "Override written for Samsung Odyssey.".to_string(),
                 error: false,
                 at: Instant::now(),
             }),

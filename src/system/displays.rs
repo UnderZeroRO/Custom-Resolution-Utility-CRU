@@ -447,7 +447,7 @@ pub fn relaunch_elevated() -> Result<(), String> {
 pub fn restart_driver() -> Result<String, String> {
     if !is_elevated() {
         return Err(
-            "Driver restart needs administrator rights. Rulați aplicația ca administrator."
+            "Driver restart needs administrator rights. Run the application as administrator."
                 .to_string(),
         );
     }
@@ -484,7 +484,7 @@ pub fn spawn_restart_helper() -> Result<(), String> {
 
     if !is_elevated() {
         return Err(
-            "Driver restart needs administrator rights. Rulați aplicația ca administrator."
+            "Driver restart needs administrator rights. Run the application as administrator."
                 .to_string(),
         );
     }
@@ -700,7 +700,7 @@ fn restart_driver_native() -> Result<String, String> {
     let disabled = set_display_driver_state(DICS_DISABLE);
     if disabled == 0 {
         return Err(
-            "Nu s-a putut dezactiva niciun adaptor de afișare. Verificați drepturile de administrator."
+            "Could not disable any display adapter. Check administrator rights."
                 .to_string(),
         );
     }
@@ -708,11 +708,11 @@ fn restart_driver_native() -> Result<String, String> {
     let enabled = set_display_driver_state(DICS_ENABLE);
     if enabled == 0 {
         return Err(
-            "Nu s-a putut reînnoi niciun adaptor de afișare. Verificați drepturile de administrator."
+            "Could not re-enable any display adapter. Check administrator rights."
                 .to_string(),
         );
     }
-    // CRU așteaptă 3500 ms după reînnoire ca driverul să se stabilească.
+    // CRU waits 3500 ms after re-enable for the driver to settle.
     thread::sleep(Duration::from_millis(3500));
-    Ok(format!("Driver repornit nativ ({enabled} adaptoare)"))
+    Ok(format!("Driver restarted natively ({enabled} adapters)"))
 }
