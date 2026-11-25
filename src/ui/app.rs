@@ -427,22 +427,40 @@ fn request_select(&mut self, index: usize) {
     }
 
     fn delete_timing(&mut self, index: usize) {
-        let Some(doc) = &mut self.doc else { return };
-        if doc.edid.base.descriptors[index].is_removable() {
-            doc.edid.base.descriptors[index] = Descriptor::Dummy;
+        let label = {
+            let Some(doc) = &mut self.doc else { return };
+            let Some(slot) = doc.edid.base.descriptors.get_mut(index) else {
+                return;
+            };
+            if !slot.is_removable() {
+                return;
+            }
+            let label = slot.summary();
+            *slot = Descriptor::Dummy;
             self.selected_timing = None;
-        }
+            label
+        };
+        self.notify(format!("{label} removed from the working copy"), false);
     }
 
     fn move_timing(&mut self, index: usize, delta: i32) {
         let Some(doc) = &mut self.doc else { return };
-        let target = index as i32 + delta;
-        if target < 0 || target >= doc.edid.base.descriptors.len() as i32 {
-            return;
+        let detailed_indices: Vec<usize> = doc
+            .edid
+            .base
+            .descriptors
+            .iter()
+            .enumerate()
+            .filter_map(|(i, d)| matches!(d, Descriptor::Detailed(_)).then_some(i))
+            .collect();
+        if let Some(pos) = detailed_indices.iter().position(|&i| i == index) {
+            let target_pos = pos as i32 + delta;
+            if target_pos >= 0 && (target_pos as usize) < detailed_indices.len() {
+                let target = detailed_indices[target_pos as usize];
+                doc.edid.base.descriptors.swap(index, target);
+                self.selected_timing = Some(target);
+            }
         }
-        let target = target as usize;
-        doc.edid.base.descriptors.swap(index, target);
-        self.selected_timing = Some(target);
     }
 }
 
@@ -1982,5 +2000,17 @@ mod tests {
         app.open_editor(Some(0));
         let out = run_frame(&mut app, 1120.0, 720.0);
         assert!(!out.shapes.is_empty());
+    }
+
+    #[test]
+    fn delete_timing_removes_selected_detailed_resolution() {
+        let mut app = sample_app(ThemeMode::Dark);
+        let before = app.doc.as_ref().unwrap().detailed().len();
+        let (first_idx, _) = app.doc.as_ref().unwrap().detailed()[0];
+        app.delete_timing(first_idx);
+        let doc = app.doc.as_ref().unwrap();
+        assert_eq!(doc.detailed().len(), before - 1);
+        assert!(doc.dirty());
+        assert!(app.selected_timing.is_none());
     }
 }

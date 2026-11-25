@@ -573,7 +573,7 @@ impl Descriptor {
     }
 
     pub fn is_removable(&self) -> bool {
-        !matches!(self, Descriptor::Detailed(_))
+        matches!(self, Descriptor::Detailed(_))
     }
 }
 
@@ -772,5 +772,22 @@ mod tests {
             .expect("new timing present");
         assert_eq!(found.htotal(), 2080);
         assert!(out.chunks(128).all(|b| b.iter().fold(0u8, |a, &x| a.wrapping_add(x)) == 0));
+    }
+
+    #[test]
+    fn deleting_a_detailed_timing_works_and_roundtrips() {
+        let data = hex(SAM0D46);
+        let mut e = Edid::parse(&data).unwrap();
+        let initial_count = e.detailed_timings().len();
+        assert!(initial_count >= 1);
+        let idx = e
+            .base
+            .descriptors
+            .iter()
+            .position(|d| d.is_removable())
+            .expect("detailed timing must be removable");
+        e.base.descriptors[idx] = Descriptor::Dummy;
+        let reparsed = Edid::parse(&e.serialize()).unwrap();
+        assert_eq!(reparsed.detailed_timings().len(), initial_count - 1);
     }
 }
